@@ -1,0 +1,72 @@
+# arXiv文献监控系统配置
+
+arxiv_monitor:
+  # 搜索关键词（中英文混合）
+  keywords:
+    - magnetoelectric coupling
+    - quantum spin liquid
+    - multiferroic
+    - topological insulator
+    - skyrmion
+    - spintronics
+    - condensed matter physics
+    - magnetic materials
+    - electronic structure
+    - strongly correlated systems
+    - 磁电耦合
+    - 量子自旋液体
+    - 多铁性
+    - 拓扑绝缘体
+    - 斯格明子
+    - 自旋电子学
+  
+  # arXiv分类
+  categories:
+    - cond-mat.mes-hall    # 介观系统和霍尔效应
+    - cond-mat.str-el     # 强关联电子系统
+    - cond-mat.mtrl-sci   # 材料科学
+    - cond-mat.supr-con   # 超导
+    - physics.app-ph      # 应用物理
+    - physics.chem-ph     # 化学物理
+  
+  # 搜索设置
+  search_settings:
+    max_results: 20        # 最大结果数
+    days_back: 1           # 搜索过去多少天
+    filter_strict: true    # 严格关键词过滤
+    include_abstract: true # 包含摘要
+  
+  # 报告设置
+  report_settings:
+    format: markdown       # 输出格式: markdown/text
+    include_stats: true    # 包含统计信息
+    categorize_by_keyword: true # 按关键词分类
+    max_authors_display: 3 # 最多显示作者数
+  
+  # 通知设置
+  notification_settings:
+    enabled: true          # 启用通知
+    channel: feishu        # 通知渠道: feishu/email
+    schedule: "09:00"      # 每天发送时间
+    only_new_papers: true  # 只发送新文献
+    min_papers_to_notify: 1 # 最少文献数才通知
+  
+  # 存储设置
+  storage_settings:
+    output_dir: ./reports  # 报告输出目录
+    keep_days: 30          # 保留多少天的报告
+    backup_enabled: true   # 启用备份
+
+# 用户偏好
+user_preferences:
+  name: 科研工作者
+  research_field: 凝聚态物理/磁电耦合/量子自旋液体
+  timezone: Asia/Shanghai
+  language: zh-CN
+  daily_reading_time: "09:00-11:00"
+  priority_keywords:
+    - magnetoelectric coupling
+    - quantum spin liquid
+  excluded_keywords:
+    - review
+    - tutorial
