@@ -2,7 +2,7 @@ name: Daily arXiv Report
 
 on:
   schedule:
-    - cron: '30 5 * * *'          # 每天北京时间 13:30 运行
+    - cron: '30 5 * * *'          # 每天北京时间 13:30
   workflow_dispatch:
 
 jobs:
@@ -25,11 +25,12 @@ jobs:
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
           FEISHU_SECRET: ${{ secrets.FEISHU_SECRET }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}   # 如果需要翻译，请设置此 secret；若不需要可删除
         run: |
-          python arxiv_daily_report.py --save
+          python arxiv_daily_report.py
 
-      - name: Upload report
+      - name: Upload sent_papers.json (optional)
         uses: actions/upload-artifact@v4
         with:
-          name: daily-report
-          path: reports/
+          name: sent-papers
+          path: sent_papers.json
