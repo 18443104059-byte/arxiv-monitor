@@ -141,6 +141,44 @@ def save_report(report, output_format='markdown'):
     
     return filepath
 
+def send_to_feishu(report, webhook_url):
+    """
+    发送报告到飞书
+    :param report: 报告内容（字符串）
+    :param webhook_url: 飞书机器人 webhook 地址
+    """
+    try:
+        import requests
+    except ImportError:
+        print("❌ 未安装 requests 库，无法发送飞书消息")
+        return
+
+    # 简化报告内容（飞书消息有长度限制）
+    lines = report.split('\n')
+    summary = '\n'.join(lines[:50])  # 取前 50 行
+    if len(lines) > 50:
+        summary += "\n\n... (报告过长，请查看完整文件)"
+
+    payload = {
+        "msg_type": "text",
+        "content": {
+            "text": summary
+        }
+    }
+
+    try:
+        response = requests.post(webhook_url, json=payload, timeout=10)
+        if response.status_code == 200:
+            result = response.json()
+            if result.get("code") == 0:
+                print("✅ 已发送到飞书")
+            else:
+                print(f"❌ 飞书返回错误: {result}")
+        else:
+            print(f"❌ 发送失败 HTTP {response.status_code}: {response.text}")
+    except Exception as e:
+        print(f"❌ 发送异常: {e}")
+
 def main():
     """主函数"""
     setup_encoding()
@@ -176,6 +214,14 @@ def main():
     if args.save:
         filepath = save_report(report)
         print(f"\n💾 报告已保存到: {filepath}")
+
+    # ---------- 新增：发送到飞书 ----------
+    webhook_url = os.getenv("FEISHU_WEBHOOK_URL")
+    if webhook_url:
+        send_to_feishu(report, webhook_url)
+    else:
+        print("⚠️ 未设置 FEISHU_WEBHOOK_URL，跳过发送")
+    # ------------------------------------
 
 if __name__ == "__main__":
     main()
