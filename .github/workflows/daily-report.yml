@@ -24,6 +24,7 @@ jobs:
       - name: Run arXiv monitor
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          FEISHU_SECRET: ${{ secrets.FEISHU_SECRET }}
         run: |
           python arxiv_daily_report.py --save
 
