@@ -2,7 +2,7 @@ name: Daily arXiv Report
 
 on:
   schedule:
-    - cron: '0 1 * * *'
+    - cron: '30 5 * * *'          # 每天北京时间 13:30 运行
   workflow_dispatch:
 
 jobs:
@@ -22,11 +22,13 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run arXiv monitor
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
         run: |
-          python arxiv_daily_report.py
+          python arxiv_daily_report.py --save
 
       - name: Upload report
         uses: actions/upload-artifact@v4
         with:
           name: daily-report
-          path: reports/                     # 根据实际情况调整
+          path: reports/
