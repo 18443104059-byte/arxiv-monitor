@@ -19,15 +19,14 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install feedparser
+          pip install feedparser pyyaml  # 根据你的 requirements.txt 安装，可能需要其他依赖
 
       - name: Run arXiv monitor
         run: |
-          cd arxiv-monitor
-          python scripts/arxiv_daily_report.py
+          python arxiv_daily_report.py    # 直接运行根目录下的脚本
 
       - name: Upload report
         uses: actions/upload-artifact@v4
         with:
           name: daily-report
-          path: arxiv-monitor/reports/
+          path: reports/                  # 假设脚本生成报告在 reports/ 目录下（根据实际情况调整）
