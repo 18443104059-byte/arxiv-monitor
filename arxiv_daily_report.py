@@ -141,11 +141,12 @@ def save_report(report, output_format='markdown'):
     
     return filepath
 
-def send_to_feishu(report, webhook_url):
+def send_to_feishu(report, webhook_url, secret=None):
     """
-    发送报告到飞书
+    发送报告到飞书（支持签名验证）
     :param report: 报告内容（字符串）
     :param webhook_url: 飞书机器人 webhook 地址
+    :param secret: 飞书签名密钥（如果开启了签名验证）
     """
     try:
         import requests
@@ -165,6 +166,20 @@ def send_to_feishu(report, webhook_url):
             "text": summary
         }
     }
+
+    # 如果提供了 secret，则添加签名
+    if secret:
+        import hashlib
+        import base64
+        import hmac
+        import time
+        timestamp = str(int(time.time()))
+        string_to_sign = timestamp + "\n" + secret
+        sign = base64.b64encode(
+            hmac.new(string_to_sign.encode('utf-8'), digestmod=hashlib.sha256).digest()
+        ).decode('utf-8')
+        payload["timestamp"] = timestamp
+        payload["sign"] = sign
 
     try:
         response = requests.post(webhook_url, json=payload, timeout=10)
@@ -215,13 +230,13 @@ def main():
         filepath = save_report(report)
         print(f"\n💾 报告已保存到: {filepath}")
 
-    # ---------- 新增：发送到飞书 ----------
+    # 发送到飞书
     webhook_url = os.getenv("FEISHU_WEBHOOK_URL")
+    secret = os.getenv("FEISHU_SECRET")   # 获取签名密钥
     if webhook_url:
-        send_to_feishu(report, webhook_url)
+        send_to_feishu(report, webhook_url, secret)
     else:
         print("⚠️ 未设置 FEISHU_WEBHOOK_URL，跳过发送")
-    # ------------------------------------
 
 if __name__ == "__main__":
     main()
