@@ -1,204 +1,213 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-arXiv每日文献报告生成（简化配置版）
-只需要在 KEYWORDS 列表里填写关键词，自动生成 abs 字段查询
+多源论文监控系统：arXiv + IOP Science (via nsearch)
+✅ arXiv 预印本（每日更新）
+✅ IOP 正式论文（Japanese Journal of Applied Physics 等）
+✅ 支持 QSL / 阻挫磁体 / 磁电耦合 / 单晶生长
+✅ DeepSeek 中文摘要 + 飞书推送（支持签名）
 """
 
 import os
 import sys
-import re
+import requests
+import json
 import time
-import argparse
 import hashlib
 import base64
 import hmac
-import json
-import xml.etree.ElementTree as ET
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote_plus
-from pathlib import Path
+from bs4 import BeautifulSoup
+import re
 
-import requests
+# ==================== 配置区 ====================
+# 从环境变量读取（GitHub Secrets 注入）
+FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL")
+FEISHU_SECRET = os.getenv("FEISHU_SECRET")          # 可选，如果开启了签名则必须提供
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
-# ==================== 简化配置区 ====================
-# 在这里填写您感兴趣的关键词，每行一个
-KEYWORDS = [
-    "quantum spin liquid",
-    "frustrated magnet",
-    "pyrochlore",
-    "kagome",
-    "single crystal growth",
-    "magnetoelectric",
-    "multiferroic",
-    "QSL",
-    "geometric frustration"
+if not FEISHU_WEBHOOK_URL:
+    print("❌ 未设置 FEISHU_WEBHOOK_URL，无法发送飞书消息")
+    sys.exit(1)
+if not DEEPSEEK_API_KEY:
+    print("❌ 未设置 DEEPSEEK_API_KEY，无法翻译摘要")
+    sys.exit(1)
+
+# === arXiv 检索策略（使用 abs: 字段，避免语法错误）===
+ARXIV_TOPICS = [
+    {
+        "name": "【arXiv-QSL】",
+        "queries": [
+            'abs:"quantum spin liquid"',
+            'abs:"quantum spin liquid" abs:pyrochlore',
+            'abs:QSL abs:"frustrated magnet"',
+            'abs:"spin liquid" abs:"geometric frustration"',
+            'abs:"kagome" abs:"geometric frustration"'
+        ],
+        "target_count": 5
+    },
+    {
+        "name": "【arXiv-生长/磁电】",
+        "queries": [
+            'abs:"single crystal growth" abs:magnet',
+            'abs:"flux growth" abs:"quantum magnet"',
+            'abs:"magnetoelectric" abs:kagome',
+            'abs:multiferroic abs:"frustrated"'
+        ],
+        "target_count": 3
+    }
 ]
 
-# 组合词最大数量（自动生成两两组合，增加覆盖）
-MAX_COMBINE = 2
+# === IOP nsearch 搜索词 ===
+IOP_SEARCH_TERMS = [
+    "quantum spin liquid frustrated magnet",
+    "single crystal growth kagome pyrochlore",
+    "magnetoelectric frustrated quantum magnet",
+    "flux growth RuCl3 Herbertsmithite"
+]
 
-# 每个主题的目标论文数量
-TARGET_COUNT = 5
+TIME_WINDOW_HOURS = 168  # 查最近7天
+SENT_IDS_FILE = Path(__file__).parent / "sent_papers.json"
 
-# 输出目录
-OUTPUT_DIR = Path("./reports")
-OUTPUT_DIR.mkdir(exist_ok=True)
-
-# 已发送ID记录
-SENT_IDS_FILE = Path("./sent_papers.json")
-# ===================================================
-
+# ==================== 工具函数 ====================
 def load_sent_ids():
     if SENT_IDS_FILE.exists():
         try:
-            return set(json.loads(SENT_IDS_FILE.read_text(encoding='utf-8')))
+            return set(json.loads(SENT_IDS_FILE.read_text(encoding="utf-8")))
         except:
             return set()
     return set()
 
 def save_sent_ids(ids):
-    SENT_IDS_FILE.write_text(json.dumps(list(ids), indent=2), encoding='utf-8')
+    SENT_IDS_FILE.write_text(json.dumps(list(ids), indent=2), encoding="utf-8")
 
-def generate_queries(keywords, max_combine=2):
-    """
-    从关键词列表生成查询语句列表
-    生成策略：
-    - 每个关键词单独作为 abs:"关键词"
-    - 每两个关键词组合为 abs:"词1" abs:"词2"
-    """
-    queries = []
-    # 单关键词
-    for k in keywords:
-        if k.strip():
-            queries.append(f'abs:"{k.strip()}"')
-    # 两词组合
-    if max_combine >= 2:
-        for i in range(len(keywords)):
-            for j in range(i+1, len(keywords)):
-                if keywords[i].strip() and keywords[j].strip():
-                    queries.append(f'abs:"{keywords[i].strip()}" abs:"{keywords[j].strip()}"')
-    # 去重
-    return list(set(queries))
-
-def query_arxiv_raw(query_str, max_results=30):
+# --- arXiv 相关 ---
+def query_arxiv_raw(query_str, max_results=30, timeout=30):
     base_url = "https://export.arxiv.org/api/query"
     url = f"{base_url}?search_query={quote_plus(query_str)}&sortBy=submittedDate&sortOrder=descending&start=0&max_results={max_results}"
-    resp = requests.get(url, timeout=30)
-    resp.raise_for_status()
-    return resp.text
+    response = requests.get(url, timeout=timeout)
+    response.raise_for_status()
+    return response.text
 
-def parse_arxiv_entry(entry_xml):
-    ns = {'arxiv': 'http://www.w3.org/2005/Atom'}
-    entry = ET.fromstring(entry_xml)
-    title = entry.find('arxiv:title', ns).text.strip()
-    summary = entry.find('arxiv:summary', ns).text.strip()
-    link = entry.find('arxiv:id', ns).text
-    paper_id = link.replace('http://arxiv.org/abs/', 'arxiv:')
-    published = entry.find('arxiv:published', ns).text
-    pub_dt = datetime.strptime(published[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
-    authors = [author.find('arxiv:name', ns).text for author in entry.findall('arxiv:author', ns)]
-    categories = [cat.get('term') for cat in entry.findall('arxiv:category', ns)]
-    return {
-        'id': paper_id,
-        'title': title,
-        'summary': summary,
-        'link': link,
-        'published': published,
-        'authors': authors,
-        'categories': categories,
-        'pub_dt': pub_dt
-    }
-
-def fetch_arxiv_papers(queries, since_dt, target_count):
-    collected = []
-    seen_ids = set()
-    for q in queries:
-        if len(collected) >= target_count:
-            break
+def parse_arxiv_xml(xml_text, since_dt):
+    entries = []
+    for entry in xml_text.split("<entry>")[1:]:
         try:
-            xml = query_arxiv_raw(q, max_results=25)
-            for entry_xml in xml.split('<entry>')[1:]:
-                entry_xml = '<entry>' + entry_xml.split('</entry>')[0] + '</entry>'
-                try:
-                    paper = parse_arxiv_entry(entry_xml)
-                    if paper['pub_dt'] >= since_dt and paper['id'] not in seen_ids:
-                        seen_ids.add(paper['id'])
-                        collected.append(paper)
-                        if len(collected) >= target_count:
-                            break
-                except Exception as e:
-                    continue
-        except Exception as e:
-            print(f"⚠️ 查询失败: {q[:60]}... {e}")
+            title = entry.split("<title>")[1].split("</title>")[0].strip()
+            summary = entry.split("<summary>")[1].split("</summary>")[0].strip()
+            link = entry.split('<link href="')[1].split('"')[0]
+            paper_id = "arxiv:" + link.split("/abs/")[-1]
+            published = entry.split("<published>")[1].split("</published>")[0]
+            pub_dt = datetime.strptime(published[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+            if pub_dt >= since_dt:
+                entries.append({"id": paper_id, "title": title, "summary": summary, "link": link})
+        except:
             continue
-    return collected
+    return entries
 
-def generate_report(days_back=1):
-    since_dt = datetime.now(timezone.utc) - timedelta(days=days_back)
-    queries = generate_queries(KEYWORDS, max_combine=MAX_COMBINE)
-    print(f"📅 搜索过去 {days_back} 天")
-    print(f"🔍 生成 {len(queries)} 条查询语句")
-    all_papers = fetch_arxiv_papers(queries, since_dt, TARGET_COUNT * len(KEYWORDS))  # 粗略设总数
-
-    if not all_papers:
-        return "❌ 今日未找到相关文献"
-
-    # 按ID去重（已由fetch内部去重）
-    lines = []
-    lines.append(f"# 📚 arXiv每日文献监控报告")
-    lines.append(f"**报告日期**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    lines.append(f"**搜索范围**: 最近 {days_back} 天")
-    lines.append(f"**新论文数**: {len(all_papers)} 篇")
-    lines.append("")
-
-    for i, p in enumerate(all_papers, 1):
-        authors = p['authors'][:2]
-        author_str = ', '.join(authors) + ('等' if len(p['authors']) > 2 else '')
-        categories = ', '.join(p['categories'][:2])
-        lines.append(f"### {i}. {p['title']}")
-        lines.append("")
-        lines.append(f"**ID**: `{p['id']}`  ")
-        lines.append(f"**作者**: {author_str}  ")
-        lines.append(f"**发布时间**: {p['published']}  ")
-        lines.append(f"**分类**: {categories}  ")
-        lines.append(f"**PDF**: [下载链接]({p['link']})  ")
-        lines.append(f"**arXiv**: [查看页面]({p['link']})  ")
-        lines.append("")
-        lines.append(f"**摘要**:")
-        summary = p['summary'].replace('\n', ' ')
-        lines.append(f"> {summary}")
-        lines.append("")
-
-    lines.append("---")
-    lines.append("*自动生成于 arXiv 监控系统*")
-    return "\n".join(lines)
-
-def save_report(content):
-    date_str = datetime.now().strftime("%Y%m%d")
-    filename = f"arxiv_daily_report_{date_str}.md"
-    filepath = OUTPUT_DIR / filename
-    filepath.write_text(content, encoding='utf-8')
-    return filepath
-
-def send_to_feishu(text, webhook_url, secret=None):
-    lines = text.split('\n')
-    summary = '\n'.join(lines[:50])
-    if len(lines) > 50:
-        summary += "\n\n... (报告过长，请查看完整文件)"
-    payload = {"msg_type": "text", "content": {"text": summary}}
-    if secret:
-        timestamp = str(int(time.time()))
-        string_to_sign = timestamp + "\n" + secret
-        sign = base64.b64encode(hmac.new(string_to_sign.encode('utf-8'), digestmod=hashlib.sha256).digest()).decode('utf-8')
-        payload["timestamp"] = timestamp
-        payload["sign"] = sign
+# --- IOP nsearch 抓取 ---
+def fetch_iop_nsearch_papers(keywords, since_dt):
+    base_url = "https://iopscience.iop.org/nsearch"
+    params = {"terms": keywords, "sort": "publishDate"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate",
+        "Connection": "keep-alive",
+    }
     try:
-        resp = requests.post(webhook_url, json=payload, timeout=10)
+        response = requests.get(base_url, params=params, headers=headers, timeout=20)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+        papers = []
+        for item in soup.select('div.list-item'):
+            try:
+                title_tag = item.select_one('h3 a')
+                if not title_tag:
+                    continue
+                title = title_tag.get_text(strip=True)
+                link = "https://iopscience.iop.org" + title_tag['href']
+                abs_tag = item.select_one('.abstract')
+                abstract = abs_tag.get_text(strip=True) if abs_tag else ""
+                date_tag = item.select_one('.pub-date')
+                if not date_tag:
+                    continue
+                date_str = date_tag.get_text()
+                match = re.search(r'(\d{1,2})\s+(\w+)\s+(\d{4})', date_str)
+                if not match:
+                    continue
+                day, month, year = match.groups()
+                pub_date = datetime.strptime(f"{day} {month} {year}", "%d %b %Y").replace(tzinfo=timezone.utc)
+                if pub_date >= since_dt:
+                    paper_id = f"iop:{link.split('/')[-1]}"
+                    papers.append({
+                        "id": paper_id,
+                        "title": title,
+                        "summary": abstract,
+                        "link": link
+                    })
+            except Exception:
+                continue
+        return papers
+    except Exception as e:
+        print(f"⚠️ IOP nsearch 抓取失败 ({keywords}): {e}")
+        return []
+
+# --- 摘要翻译 ---
+def summarize_with_deepseek(text):
+    if not text.strip():
+        return "【摘要】无摘要。"
+    prompt = (
+        "你是一位顶尖凝聚态物理学家。请将以下英文论文摘要翻译成专业、简洁的中文，并提炼出核心创新点（100字以内）。"
+        f"\n\n{text}\n\n"
+        "输出格式：【中文摘要】... 【核心创新】..."
+    )
+    headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
+    data = {"model": "deepseek-coder", "messages": [{"role": "user", "content": prompt}], "max_tokens": 300}
+    try:
+        resp = requests.post("https://api.deepseek.com/chat/completions", headers=headers, json=data, timeout=20)
+        if resp.status_code == 200:
+            return resp.json()["choices"][0]["message"]["content"].strip()
+        else:
+            return f"【摘要】{text[:200]}..."
+    except:
+        return f"【摘要】{text[:200]}..."
+
+# --- 飞书推送（支持签名）---
+def send_to_feishu(title, deep_summary, link, tag):
+    # 构造飞书富文本消息
+    content = {
+        "msg_type": "post",
+        "content": {
+            "post": {
+                "zh_cn": {
+                    "title": f"{tag} {title}",
+                    "content": [
+                        [{"tag": "text", "text": deep_summary}],
+                        [{"tag": "a", "text": "查看全文", "href": link}]
+                    ]
+                }
+            }
+        }
+    }
+    # 如果设置了签名密钥，添加签名
+    if FEISHU_SECRET:
+        timestamp = str(int(time.time()))
+        string_to_sign = timestamp + "\n" + FEISHU_SECRET
+        sign = base64.b64encode(
+            hmac.new(string_to_sign.encode('utf-8'), digestmod=hashlib.sha256).digest()
+        ).decode('utf-8')
+        content["timestamp"] = timestamp
+        content["sign"] = sign
+    try:
+        resp = requests.post(FEISHU_WEBHOOK_URL, json=content, timeout=10)
         if resp.status_code == 200:
             result = resp.json()
             if result.get("code") == 0:
-                print("✅ 已发送到飞书")
+                print(f"✅ 已发送到飞书: {title[:30]}...")
             else:
                 print(f"❌ 飞书返回错误: {result}")
         else:
@@ -206,37 +215,62 @@ def send_to_feishu(text, webhook_url, secret=None):
     except Exception as e:
         print(f"❌ 发送异常: {e}")
 
-def main():
-    if hasattr(sys.stdout, 'buffer'):
-        sys.stdout = open(sys.stdout.fileno(), 'w', encoding='utf-8', buffering=1)
-        sys.stderr = open(sys.stderr.fileno(), 'w', encoding='utf-8', buffering=1)
-
-    parser = argparse.ArgumentParser(description='arXiv每日文献报告')
-    parser.add_argument('--days', type=int, default=1, help='搜索过去多少天的文献 (默认: 1)')
-    parser.add_argument('--output', choices=['markdown', 'text'], default='markdown', help='输出格式')
-    parser.add_argument('--save', action='store_true', help='保存报告到文件')
-    args = parser.parse_args()
-
-    report = generate_report(days_back=args.days)
-
-    if args.output == 'text':
-        text_report = re.sub(r'#+\s*', '', report)
-        text_report = re.sub(r'\*\*(.*?)\*\*', r'\1', text_report)
-        text_report = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text_report)
-        print(text_report)
-    else:
-        print(report)
-
-    if args.save:
-        filepath = save_report(report)
-        print(f"\n💾 报告已保存到: {filepath}")
-
-    webhook = os.getenv("FEISHU_WEBHOOK_URL")
-    secret = os.getenv("FEISHU_SECRET")
-    if webhook:
-        send_to_feishu(report, webhook, secret)
-    else:
-        print("⚠️ 未设置 FEISHU_WEBHOOK_URL，跳过发送")
-
+# ==================== 主程序 ====================
 if __name__ == "__main__":
-    main()
+    print("=" * 60)
+    print("🚀 启动多源论文监控系统")
+    print("📚 来源：arXiv + IOP Science (nsearch)")
+    print("=" * 60)
+    
+    sent_ids = load_sent_ids()
+    all_new_papers = []
+    since_dt = datetime.now(timezone.utc) - timedelta(hours=TIME_WINDOW_HOURS)
+    
+    # 1. 抓取 arXiv
+    for topic in ARXIV_TOPICS:
+        print(f"\n🔍 检索 arXiv: {topic['name']}")
+        collected = 0
+        for q in topic["queries"]:
+            if collected >= topic["target_count"]:
+                break
+            try:
+                xml = query_arxiv_raw(q, max_results=25)
+                papers = parse_arxiv_xml(xml, since_dt)
+                for p in papers:
+                    if p["id"] not in sent_ids and p["id"] not in [x["id"] for x in all_new_papers]:
+                        print(f"  🧠 arXiv: {p['title'][:50]}...")
+                        p["deep_summary"] = summarize_with_deepseek(p["summary"])
+                        p["tag"] = topic["name"]
+                        all_new_papers.append(p)
+                        sent_ids.add(p["id"])
+                        collected += 1
+                        if collected >= topic["target_count"]:
+                            break
+            except Exception as e:
+                print(f"  ⚠️ arXiv 查询失败: {e}")
+        print(f"  ✅ 获取 {collected} 篇")
+
+    # 2. 抓取 IOP
+    print("\n📡 搜索 IOP Science (nsearch) ...")
+    iop_count = 0
+    for terms in IOP_SEARCH_TERMS:
+        iop_papers = fetch_iop_nsearch_papers(terms, since_dt)
+        for p in iop_papers:
+            if p["id"] not in sent_ids:
+                print(f"  🧠 IOP: {p['title'][:50]}...")
+                p["deep_summary"] = summarize_with_deepseek(p["summary"])
+                p["tag"] = "【IOP】"
+                all_new_papers.append(p)
+                sent_ids.add(p["id"])
+                iop_count += 1
+    print(f"  ✅ IOP 共获取 {iop_count} 篇")
+    
+    total = len(all_new_papers)
+    print(f"\n📬 总共找到新论文: {total} 篇")
+    
+    # 3. 推送
+    for p in all_new_papers:
+        send_to_feishu(p["title"], p["deep_summary"], p["link"], p["tag"])
+    
+    save_sent_ids(sent_ids)
+    print(f"\n✅ 任务完成！已记录 {len(sent_ids)} 篇论文。")
