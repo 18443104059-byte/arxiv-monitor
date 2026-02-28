@@ -1,240 +1,240 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-arXiv每日文献报告生成
+arXiv每日文献报告生成（简化配置版）
+只需要在 KEYWORDS 列表里填写关键词，自动生成 abs 字段查询
 """
 
-import argparse
-import json
-from datetime import datetime, timedelta
 import os
 import sys
+import re
+import time
+import argparse
+import hashlib
+import base64
+import hmac
+import json
+import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta, timezone
+from urllib.parse import quote_plus
+from pathlib import Path
 
-def setup_encoding():
-    """设置编码以支持中文"""
-    import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+import requests
 
-def load_config():
-    """加载配置文件"""
-    config_path = os.path.join(os.path.dirname(__file__), '..', 'config.yaml')
-    
-    # 默认配置
-    default_config = {
-        'keywords': [
-            'magnetoelectric coupling',
-            'quantum spin liquid',
-            'multiferroic',
-            'topological insulator',
-            'skyrmion',
-            'spintronics',
-            'condensed matter physics'
-        ],
-        'categories': ['cond-mat', 'physics'],
-        'max_results': 15,
-        'output_dir': './reports',
-        'timezone': 'Asia/Shanghai'
-    }
-    
-    # 如果配置文件存在则加载
-    if os.path.exists(config_path):
+# ==================== 简化配置区 ====================
+# 在这里填写您感兴趣的关键词，每行一个
+KEYWORDS = [
+    "quantum spin liquid",
+    "frustrated magnet",
+    "pyrochlore",
+    "kagome",
+    "single crystal growth",
+    "magnetoelectric",
+    "multiferroic",
+    "QSL",
+    "geometric frustration"
+]
+
+# 组合词最大数量（自动生成两两组合，增加覆盖）
+MAX_COMBINE = 2
+
+# 每个主题的目标论文数量
+TARGET_COUNT = 5
+
+# 输出目录
+OUTPUT_DIR = Path("./reports")
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+# 已发送ID记录
+SENT_IDS_FILE = Path("./sent_papers.json")
+# ===================================================
+
+def load_sent_ids():
+    if SENT_IDS_FILE.exists():
         try:
-            import yaml
-            with open(config_path, 'r', encoding='utf-8') as f:
-                user_config = yaml.safe_load(f)
-                default_config.update(user_config)
+            return set(json.loads(SENT_IDS_FILE.read_text(encoding='utf-8')))
         except:
-            pass
-    
-    return default_config
+            return set()
+    return set()
 
-def generate_daily_report(config, days_back=1):
-    """生成每日报告"""
-    from arxiv_search import search_arxiv, filter_by_keywords, format_output
-    
-    print(f"📊 生成arXiv每日文献报告")
-    print(f"📅 日期: {datetime.now().strftime('%Y-%m-%d')}")
-    print(f"🔑 关键词: {', '.join(config['keywords'][:5])}...")
-    
-    # 搜索文献
-    papers = search_arxiv(
-        keywords=config['keywords'],
-        max_results=config['max_results'],
-        days_back=days_back
-    )
-    
-    if not papers:
+def save_sent_ids(ids):
+    SENT_IDS_FILE.write_text(json.dumps(list(ids), indent=2), encoding='utf-8')
+
+def generate_queries(keywords, max_combine=2):
+    """
+    从关键词列表生成查询语句列表
+    生成策略：
+    - 每个关键词单独作为 abs:"关键词"
+    - 每两个关键词组合为 abs:"词1" abs:"词2"
+    """
+    queries = []
+    # 单关键词
+    for k in keywords:
+        if k.strip():
+            queries.append(f'abs:"{k.strip()}"')
+    # 两词组合
+    if max_combine >= 2:
+        for i in range(len(keywords)):
+            for j in range(i+1, len(keywords)):
+                if keywords[i].strip() and keywords[j].strip():
+                    queries.append(f'abs:"{keywords[i].strip()}" abs:"{keywords[j].strip()}"')
+    # 去重
+    return list(set(queries))
+
+def query_arxiv_raw(query_str, max_results=30):
+    base_url = "https://export.arxiv.org/api/query"
+    url = f"{base_url}?search_query={quote_plus(query_str)}&sortBy=submittedDate&sortOrder=descending&start=0&max_results={max_results}"
+    resp = requests.get(url, timeout=30)
+    resp.raise_for_status()
+    return resp.text
+
+def parse_arxiv_entry(entry_xml):
+    ns = {'arxiv': 'http://www.w3.org/2005/Atom'}
+    entry = ET.fromstring(entry_xml)
+    title = entry.find('arxiv:title', ns).text.strip()
+    summary = entry.find('arxiv:summary', ns).text.strip()
+    link = entry.find('arxiv:id', ns).text
+    paper_id = link.replace('http://arxiv.org/abs/', 'arxiv:')
+    published = entry.find('arxiv:published', ns).text
+    pub_dt = datetime.strptime(published[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+    authors = [author.find('arxiv:name', ns).text for author in entry.findall('arxiv:author', ns)]
+    categories = [cat.get('term') for cat in entry.findall('arxiv:category', ns)]
+    return {
+        'id': paper_id,
+        'title': title,
+        'summary': summary,
+        'link': link,
+        'published': published,
+        'authors': authors,
+        'categories': categories,
+        'pub_dt': pub_dt
+    }
+
+def fetch_arxiv_papers(queries, since_dt, target_count):
+    collected = []
+    seen_ids = set()
+    for q in queries:
+        if len(collected) >= target_count:
+            break
+        try:
+            xml = query_arxiv_raw(q, max_results=25)
+            for entry_xml in xml.split('<entry>')[1:]:
+                entry_xml = '<entry>' + entry_xml.split('</entry>')[0] + '</entry>'
+                try:
+                    paper = parse_arxiv_entry(entry_xml)
+                    if paper['pub_dt'] >= since_dt and paper['id'] not in seen_ids:
+                        seen_ids.add(paper['id'])
+                        collected.append(paper)
+                        if len(collected) >= target_count:
+                            break
+                except Exception as e:
+                    continue
+        except Exception as e:
+            print(f"⚠️ 查询失败: {q[:60]}... {e}")
+            continue
+    return collected
+
+def generate_report(days_back=1):
+    since_dt = datetime.now(timezone.utc) - timedelta(days=days_back)
+    queries = generate_queries(KEYWORDS, max_combine=MAX_COMBINE)
+    print(f"📅 搜索过去 {days_back} 天")
+    print(f"🔍 生成 {len(queries)} 条查询语句")
+    all_papers = fetch_arxiv_papers(queries, since_dt, TARGET_COUNT * len(KEYWORDS))  # 粗略设总数
+
+    if not all_papers:
         return "❌ 今日未找到相关文献"
-    
-    # 关键词过滤
-    filtered_papers = filter_by_keywords(papers, config['keywords'])
-    
-    # 按关键词分类
-    categorized = {}
-    for paper in filtered_papers:
-        keyword = paper.get('matched_keyword', '其他')
-        if keyword not in categorized:
-            categorized[keyword] = []
-        categorized[keyword].append(paper)
-    
-    # 生成报告
-    report = []
-    report.append(f"# 📚 arXiv每日文献监控报告")
-    report.append(f"**报告日期**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    report.append(f"**搜索范围**: 最近{days_back}天")
-    report.append(f"**找到文献**: {len(filtered_papers)}篇 (共搜索到{len(papers)}篇)")
-    report.append("")
-    
-    # 按关键词分类展示
-    for keyword, papers_in_category in categorized.items():
-        report.append(f"## 🔍 {keyword} ({len(papers_in_category)}篇)")
-        report.append("")
-        
-        for i, paper in enumerate(papers_in_category, 1):
-            report.append(f"### {i}. {paper['title']}")
-            report.append("")
-            report.append(f"**ID**: `{paper['id']}`  ")
-            report.append(f"**作者**: {', '.join(paper['authors'][:2])}" + 
-                         ("等" if len(paper['authors']) > 2 else ""))
-            report.append(f"**发布时间**: {paper['published']}  ")
-            report.append(f"**分类**: {', '.join(paper['categories'][:2])}  ")
-            report.append(f"**PDF**: [下载链接]({paper['pdf_url']})  ")
-            report.append(f"**arXiv**: [查看页面]({paper['arxiv_url']})  ")
-            report.append("")
-            report.append(f"**摘要**:")
-            report.append(f"> {paper['summary']}")
-            report.append("")
-    
-    # 统计信息
-    report.append("## 📊 统计信息")
-    report.append("")
-    report.append(f"- **总文献数**: {len(filtered_papers)}篇")
-    report.append(f"- **关键词分布**:")
-    for keyword, papers_in_category in categorized.items():
-        report.append(f"  - {keyword}: {len(papers_in_category)}篇")
-    
-    report.append(f"- **时间范围**: {datetime.now().strftime('%Y-%m-%d')}")
-    if days_back > 1:
-        start_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
-        report.append(f"- **搜索区间**: {start_date} 至 {datetime.now().strftime('%Y-%m-%d')}")
-    
-    report.append("")
-    report.append("---")
-    report.append("*自动生成于 OpenClaw arXiv监控系统*")
-    
-    return '\n'.join(report)
 
-def save_report(report, output_format='markdown'):
-    """保存报告到文件"""
-    # 创建输出目录
-    output_dir = './reports'
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # 生成文件名
+    # 按ID去重（已由fetch内部去重）
+    lines = []
+    lines.append(f"# 📚 arXiv每日文献监控报告")
+    lines.append(f"**报告日期**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"**搜索范围**: 最近 {days_back} 天")
+    lines.append(f"**新论文数**: {len(all_papers)} 篇")
+    lines.append("")
+
+    for i, p in enumerate(all_papers, 1):
+        authors = p['authors'][:2]
+        author_str = ', '.join(authors) + ('等' if len(p['authors']) > 2 else '')
+        categories = ', '.join(p['categories'][:2])
+        lines.append(f"### {i}. {p['title']}")
+        lines.append("")
+        lines.append(f"**ID**: `{p['id']}`  ")
+        lines.append(f"**作者**: {author_str}  ")
+        lines.append(f"**发布时间**: {p['published']}  ")
+        lines.append(f"**分类**: {categories}  ")
+        lines.append(f"**PDF**: [下载链接]({p['link']})  ")
+        lines.append(f"**arXiv**: [查看页面]({p['link']})  ")
+        lines.append("")
+        lines.append(f"**摘要**:")
+        summary = p['summary'].replace('\n', ' ')
+        lines.append(f"> {summary}")
+        lines.append("")
+
+    lines.append("---")
+    lines.append("*自动生成于 arXiv 监控系统*")
+    return "\n".join(lines)
+
+def save_report(content):
     date_str = datetime.now().strftime("%Y%m%d")
     filename = f"arxiv_daily_report_{date_str}.md"
-    filepath = os.path.join(output_dir, filename)
-    
-    # 保存文件
-    with open(filepath, 'w', encoding='utf-8') as f:
-        f.write(report)
-    
+    filepath = OUTPUT_DIR / filename
+    filepath.write_text(content, encoding='utf-8')
     return filepath
 
-def send_to_feishu(report, webhook_url, secret=None):
-    """
-    发送报告到飞书（支持签名验证）
-    :param report: 报告内容（字符串）
-    :param webhook_url: 飞书机器人 webhook 地址
-    :param secret: 飞书签名密钥（如果开启了签名验证）
-    """
-    try:
-        import requests
-    except ImportError:
-        print("❌ 未安装 requests 库，无法发送飞书消息")
-        return
-
-    # 简化报告内容（飞书消息有长度限制）
-    lines = report.split('\n')
-    summary = '\n'.join(lines[:50])  # 取前 50 行
+def send_to_feishu(text, webhook_url, secret=None):
+    lines = text.split('\n')
+    summary = '\n'.join(lines[:50])
     if len(lines) > 50:
         summary += "\n\n... (报告过长，请查看完整文件)"
-
-    payload = {
-        "msg_type": "text",
-        "content": {
-            "text": summary
-        }
-    }
-
-    # 如果提供了 secret，则添加签名
+    payload = {"msg_type": "text", "content": {"text": summary}}
     if secret:
-        import hashlib
-        import base64
-        import hmac
-        import time
         timestamp = str(int(time.time()))
         string_to_sign = timestamp + "\n" + secret
-        sign = base64.b64encode(
-            hmac.new(string_to_sign.encode('utf-8'), digestmod=hashlib.sha256).digest()
-        ).decode('utf-8')
+        sign = base64.b64encode(hmac.new(string_to_sign.encode('utf-8'), digestmod=hashlib.sha256).digest()).decode('utf-8')
         payload["timestamp"] = timestamp
         payload["sign"] = sign
-
     try:
-        response = requests.post(webhook_url, json=payload, timeout=10)
-        if response.status_code == 200:
-            result = response.json()
+        resp = requests.post(webhook_url, json=payload, timeout=10)
+        if resp.status_code == 200:
+            result = resp.json()
             if result.get("code") == 0:
                 print("✅ 已发送到飞书")
             else:
                 print(f"❌ 飞书返回错误: {result}")
         else:
-            print(f"❌ 发送失败 HTTP {response.status_code}: {response.text}")
+            print(f"❌ 发送失败 HTTP {resp.status_code}")
     except Exception as e:
         print(f"❌ 发送异常: {e}")
 
 def main():
-    """主函数"""
-    setup_encoding()
-    
+    if hasattr(sys.stdout, 'buffer'):
+        sys.stdout = open(sys.stdout.fileno(), 'w', encoding='utf-8', buffering=1)
+        sys.stderr = open(sys.stderr.fileno(), 'w', encoding='utf-8', buffering=1)
+
     parser = argparse.ArgumentParser(description='arXiv每日文献报告')
-    parser.add_argument('--days', type=int, default=1,
-                       help='搜索过去多少天的文献 (默认: 1)')
-    parser.add_argument('--output', choices=['markdown', 'text'],
-                       default='markdown', help='输出格式')
-    parser.add_argument('--save', action='store_true',
-                       help='保存报告到文件')
-    
+    parser.add_argument('--days', type=int, default=1, help='搜索过去多少天的文献 (默认: 1)')
+    parser.add_argument('--output', choices=['markdown', 'text'], default='markdown', help='输出格式')
+    parser.add_argument('--save', action='store_true', help='保存报告到文件')
     args = parser.parse_args()
-    
-    # 加载配置
-    config = load_config()
-    
-    # 生成报告
-    report = generate_daily_report(config, args.days)
-    
-    # 输出报告
+
+    report = generate_report(days_back=args.days)
+
     if args.output == 'text':
-        # 简化文本格式
-        import re
         text_report = re.sub(r'#+\s*', '', report)
         text_report = re.sub(r'\*\*(.*?)\*\*', r'\1', text_report)
         text_report = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text_report)
         print(text_report)
     else:
         print(report)
-    
-    # 保存报告
+
     if args.save:
         filepath = save_report(report)
         print(f"\n💾 报告已保存到: {filepath}")
 
-    # 发送到飞书
-    webhook_url = os.getenv("FEISHU_WEBHOOK_URL")
-    secret = os.getenv("FEISHU_SECRET")   # 获取签名密钥
-    if webhook_url:
-        send_to_feishu(report, webhook_url, secret)
+    webhook = os.getenv("FEISHU_WEBHOOK_URL")
+    secret = os.getenv("FEISHU_SECRET")
+    if webhook:
+        send_to_feishu(report, webhook, secret)
     else:
         print("⚠️ 未设置 FEISHU_WEBHOOK_URL，跳过发送")
 
