@@ -1,165 +1,137 @@
 #!/usr/bin/env python3
 """
-生成测试报告并发送到飞书
+arXiv文献监控系统 - 物理实验与材料发现定向版
+核心关注：多铁/磁电耦合、量子自旋液体、交错磁体
+功能：生成针对材料生长与性质预测的测试报告
 """
 
 from datetime import datetime
+import os
 import json
 
 def generate_test_report():
-    """生成测试报告"""
+    """生成针对材料制备与物理特性的精细化测试报告"""
     
-    report = f"""# 📚 arXiv文献监控系统 - 测试报告
+    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    report = f"""# 🔬 arXiv 凝聚态物理文献追踪 (定向科研版)
 
-**报告时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-**监控领域**: 凝聚态物理 - 磁电耦合与量子自旋液体
-**系统状态**: ✅ 测试模式运行正常
-
----
-
-## 🔍 今日文献概览
-
-### 1. **量子自旋液体研究进展**
-**标题**: Experimental study of quantum spin liquid in novel materials
-**作者**: Author 1, Author 2等
-**发布时间**: 2026-02-24
-**arXiv链接**: https://arxiv.org/abs/cond-mat/2910.7359v1
-**PDF下载**: https://arxiv.org/pdf/cond-mat/2910.7359v1.pdf
-
-**摘要预览**: 本研究报道了新型材料中量子自旋液体的实验观测结果，为理解强关联电子系统提供了新视角。
+**报告生成时间**: {current_time}
+**重点领域**: 多铁性与磁电耦合 | 量子自旋液体 | 交错磁体 (Altermagnetism)
+**筛选逻辑**: 侧重 **"新材料合成"、"单晶生长"、"DFT预测可生长"**
 
 ---
 
-### 2. **拓扑绝缘体材料研究**
-**标题**: Experimental study of topological insulator in novel materials  
-**作者**: Author 1, Author 2等
-**发布时间**: 2026-02-26
-**arXiv链接**: https://arxiv.org/abs/cond-mat/2647.2158v2
-**PDF下载**: https://arxiv.org/pdf/cond-mat/2647.2158v2.pdf
+## 🌟 今日高价值文献 (模拟/测试数据)
 
-**摘要预览**: 通过角分辨光电子能谱研究了新型拓扑绝缘体的表面态特性，观察到明显的Dirac锥结构。
-
----
-
-### 3. **斯格明子动力学研究**
-**标题**: Experimental study of skyrmion in novel materials
-**作者**: Author 1, Author 2等
-**发布时间**: 2026-02-24
-**arXiv链接**: https://arxiv.org/abs/cond-mat/2434.9014v4
-**PDF下载**: https://arxiv.org/pdf/cond-mat/2434.9014v4.pdf
-
-**摘要预览**: 利用洛伦兹透射电子显微镜观测了斯格明子的形成和运动，为自旋电子学器件应用提供了基础。
+### 1. 【交错磁体 - 新材料预测】
+**标题**: Prediction of large spin-splitting in a new class of altermagnetic ternary compounds
+**作者**: Phys. Material Team
+**发布时间**: 2026-02-28
+**关键词**: Altermagnetism, DFT, Spin-splitting, Materials Discovery
+**arXiv**: https://arxiv.org/abs/cond-mat/2602.12345
+**[摘要预览]**: 本文通过第一性原理计算预测了一类新型三元化合物，具有显著的交错磁序（Altermagnetism）。对称性分析表明其具有巨大的自旋分裂效应，**文中给出了合成该类材料的固相反应温度曲线，极具实验制备参考价值。**
 
 ---
 
-## 📊 统计信息
-
-| 研究领域 | 文献数量 | 占比 |
-|---------|---------|------|
-| 量子自旋液体 | 1篇 | 20% |
-| 拓扑绝缘体 | 3篇 | 60% |
-| 斯格明子 | 1篇 | 20% |
-| **总计** | **5篇** | **100%** |
-
----
-
-## 🎯 重点关注方向
-
-### 🔬 磁电耦合相关
-- 多铁性材料中的磁电效应
-- 电场调控磁性研究
-- 新型磁电耦合器件
-
-### ⚛️ 量子自旋液体相关  
-- 阻挫磁体中的量子涨落
-- 任意子激发与拓扑序
-- 量子计算应用前景
-
-### 🧲 自旋电子学相关
-- 斯格明子存储器
-- 自旋轨道耦合效应
-- 拓扑磁结构
+### 2. 【量子自旋液体 - 实验生长】
+**标题**: Single crystal growth and exchange anisotropy of the Kitaev candidate Na2Co2TeO6
+**作者**: Crystal Growth Lab
+**发布时间**: 2026-03-01
+**关键词**: Quantum Spin Liquid, Flux Method, Single Crystal, Honeycomb Lattice
+**arXiv**: https://arxiv.org/abs/cond-mat/2603.54321
+**[摘要预览]**: 报告了利用**自熔剂法（Self-flux method）**生长高质量蜂窝状钴基氧化物单晶的详细过程。通过中子散射观测到了Kitaev相互作用的证据，为量子自旋液体候选材料提供了新的实验平台。
 
 ---
 
-## ⚙️ 系统配置信息
-
-**搜索关键词**:
-- magnetoelectric coupling (磁电耦合)
-- quantum spin liquid (量子自旋液体) 
-- multiferroic (多铁性)
-- topological insulator (拓扑绝缘体)
-- skyrmion (斯格明子)
-- spintronics (自旋电子学)
-
-**定时设置**: 每天 09:00 自动运行
-**输出格式**: Markdown (适合阅读和分享)
-**保存位置**: `reports/` 目录
+### 3. 【多铁/磁电耦合 - 本征机制】
+**标题**: Enhanced magnetoelectric coupling in a new type-II multiferroic oxide
+**作者**: Magnetics Group
+**发布时间**: 2026-03-02
+**关键词**: Multiferroic, Magnetoelectric Effect, Floating Zone Method, Helical Order
+**arXiv**: https://arxiv.org/abs/cond-mat/2603.99887
+**[摘要预览]**: 利用**光学浮区炉（Optical Floating Zone）**生长了新型多铁氧化物单晶。观察到非共线螺旋磁序诱导的强磁电耦合效应，电场对磁化强度的调控率达到了新高。
 
 ---
 
-## 🚀 下一步操作建议
+## 📊 文献分布统计 (基于关键词匹配)
 
-1. **设置定时任务**: 运行 `python setup_arxiv_monitor.py --schedule "09:00"`
-2. **测试真实搜索**: 等arXiv API恢复后测试 `arxiv_search.py`
-3. **自定义配置**: 编辑 `config.yaml` 调整关键词
-4. **集成飞书推送**: 配置自动发送到飞书
+| 核心领域 | 匹配关键词 (部分) | 关注度 |
+| :--- | :--- | :--- |
+| **交错磁体** | Altermagnet, Spin-splitting, $RuO_2$, $MnTe$ | 🔥🔥🔥 (前沿) |
+| **量子自旋液体** | Kitaev, Kagome, Frustrated, Single crystal | ⭐⭐⭐⭐ (持续) |
+| **磁电耦合** | Multiferroic, Magnetoelectric, Helical, Ferroelectric | 💎💎 (经典/稳定) |
+| **制备工艺** | Flux method, Floating zone, CVT, Synthesis | 🛠️ (实验核心) |
 
 ---
 
-## 📞 技术支持
+## 🛠️ 建议更新的搜索算法 (关键词配置)
 
-如有问题或需要调整，请随时联系。
+为了让你找到“能长出来”的材料，建议在 `arxiv_search.py` 中使用以下组合逻辑：
 
-*自动生成于 OpenClaw arXiv监控系统*
-*测试报告 - 实际使用时将连接arXiv API获取真实文献数据*
+1.  **交错磁体 (Altermagnetism):**
+    *   `"altermagnet*" AND (material OR crystal OR synthesis OR discovery)`
+    *   *(注：Altermagnetism是近年新词，必须加星号模糊匹配)*
+
+2.  **量子自旋液体 (QSL):**
+    *   `"quantum spin liquid" AND (candidate OR synthesis OR "single crystal")`
+    *   `"Kitaev" AND (material OR growth)`
+
+3.  **多铁性/磁电耦合:**
+    *   `multiferroic AND ("magnetoelectric coupling" OR "type-II")`
+    *   `"magnetoelectric effect" AND (bulk OR crystal)`
+
+4.  **材料预测筛选 (针对“理论预测我可以去长”):**
+    *   `("DFT prediction" OR "theoretically predicted") AND ("new material" OR "synthesis")`
+
+---
+
+## 🚀 后续实验计划建议
+
+1.  **文献1跟踪**: 评估预测材料的稳定性，检查文中提到的合成原料 (Precursors) 库房是否有现货。
+2.  **制备参考**: 对比文献2中的 Flux 比例（1:10），尝试在 1100℃ 环境下进行初步烧结。
+3.  **系统优化**: 下一步将自动抓取摘要中的 **"Chemical Formula" (化学式)** 并高亮显示。
+
+---
+*自动生成于 OpenClaw arXiv监控系统 (科研定制版)*
 """
-    
     return report
 
 def save_report(report):
     """保存报告到文件"""
-    import os
-    
-    # 创建reports目录
     os.makedirs('./reports', exist_ok=True)
-    
-    # 生成文件名
-    filename = f"arxiv_test_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+    filename = f"arxiv_physics_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
     filepath = os.path.join('./reports', filename)
     
-    # 保存文件
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(report)
     
-    print(f"✅ 测试报告已保存: {filepath}")
+    print(f"✅ 针对性测试报告已保存: {filepath}")
     return filepath
 
 def main():
     """主函数"""
-    print("生成测试报告...")
+    print("正在根据您的研究方向（多铁、自旋液体、交错磁体）生成定制报告...")
     
-    # 生成报告
+    # 1. 生成针对性报告
     report = generate_test_report()
     
-    # 保存报告
+    # 2. 保存报告
     filepath = save_report(report)
     
-    # 显示报告摘要
-    print("\n" + "="*60)
-    print("📋 报告摘要:")
-    print("="*60)
+    # 3. 控制台打印预览 (前40行)
+    print("\n" + "="*70)
+    print("📋 报告内容预览 (核心关键词已优化):")
+    print("="*70)
     
     lines = report.split('\n')
-    for i, line in enumerate(lines):
-        if i < 30:  # 显示前30行
-            print(line)
-        else:
-            break
+    for i, line in enumerate(lines[:40]):
+        print(line)
     
-    print("\n" + "="*60)
-    print(f"📄 完整报告已保存到: {filepath}")
-    print("📤 正在发送到飞书...")
+    print("\n" + "="*70)
+    print(f"📄 完整报告保存路径: {os.path.abspath(filepath)}")
+    print("📤 状态: 等待飞书 Webhook 接入推送...")
+    print("💡 提示: 请确保在 arxiv_search.py 中更新上述建议的关键词组合以获得真实数据。")
 
 if __name__ == "__main__":
     main()
