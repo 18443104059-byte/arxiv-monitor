@@ -2,7 +2,7 @@ name: Daily arXiv Report
 
 on:
   schedule:
-    - cron: '0 1 * * *'          # 每天北京时间 9：00
+    - cron: '30 20 * * *'          # 每天北京时间 9：00
   workflow_dispatch:
 
 jobs:
